@@ -164,9 +164,18 @@ def encodeData(data):
     return data
 
 
-def sign_ok(res):
-    # 贴吧只在出错时才回 error_code，缺省或 0 视为成功
-    return str(res.get('error_code', '')) in ('', '0')
+# 贴吧把「今天已经签过了」也放在 error_code 里回，但它不是失败
+ALREADY_SIGNED_CODE = '160002'
+
+
+def sign_status(res):
+    # 缺省或 0 视为签到成功，160002 视为今日已签过，其余才算失败
+    code = str(res.get('error_code', ''))
+    if code in ('', '0'):
+        return 'ok'
+    if code == ALREADY_SIGNED_CODE:
+        return 'already'
+    return 'failed'
 
 
 def client_sign(bduss, tbs, fid, kw):
@@ -180,9 +189,12 @@ def client_sign(bduss, tbs, fid, kw):
     except Exception as e:
         logger.error(f"签到贴吧：{kw} 请求异常：{e}")
         return {'error_code': 'request_failed', 'error_msg': str(e)}
-    if sign_ok(res):
+    status = sign_status(res)
+    if status == 'ok':
         gain = res.get('gain_score') or res.get('sign_num') or ''
         logger.info(f"签到成功：{kw}" + (f"，本次获得 {gain}" if gain else ''))
+    elif status == 'already':
+        logger.info(f"今日已签过：{kw}（跳过）")
     else:
         logger.warning(f"签到失败：{kw} error_code={res.get('error_code')} error_msg={res.get('error_msg')}")
     return res
@@ -230,7 +242,7 @@ def main():
         logger.error("未配置BDUSS")
         return
     b = ENV['BDUSS'].split('#')
-    total = succeeded = 0
+    counter = {'ok': 0, 'already': 0, 'failed': 0}
     failed = []
     for n, i in enumerate(b):
         logger.info("开始签到第" + str(n) + "个用户" + i)
@@ -238,16 +250,14 @@ def main():
         favorites = get_favorite(i)
         for j in favorites:
             time.sleep(random.randint(1,5))
-            res = client_sign(i, tbs, j["id"], j["name"])
-            total += 1
-            if sign_ok(res):
-                succeeded += 1
-            else:
+            status = sign_status(client_sign(i, tbs, j["id"], j["name"]))
+            counter[status] += 1
+            if status == 'failed':
                 failed.append(j["name"])
-        logger.info(f"第{n}个用户签到汇总：共{len(favorites)}个，成功{succeeded}个，失败{len(failed)}个")
+        logger.info(f"第{n}个用户签到汇总：共{len(favorites)}个，成功{counter['ok']}个，已签过{counter['already']}个，失败{counter['failed']}个")
         logger.info("完成第" + str(n) + "个用户签到")
     # send_email(favorites)
-    logger.info(f"总计签到{total}个贴吧，成功{succeeded}个，失败{len(failed)}个")
+    logger.info(f"总计{len(b)}个账号，共{sum(counter.values())}个贴吧，成功{counter['ok']}个，已签过{counter['already']}个，失败{counter['failed']}个")
     if failed:
         logger.warning("失败的贴吧：" + "、".join(failed))
     logger.info("所有用户签到结束")
