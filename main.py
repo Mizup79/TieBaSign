@@ -164,13 +164,27 @@ def encodeData(data):
     return data
 
 
+def sign_ok(res):
+    # 贴吧只在出错时才回 error_code，缺省或 0 视为成功
+    return str(res.get('error_code', '')) in ('', '0')
+
+
 def client_sign(bduss, tbs, fid, kw):
     # 客户端签到
     logger.info("开始签到贴吧：" + kw)
     data = copy.copy(SIGN_DATA)
     data.update({BDUSS: bduss, FID: fid, KW: kw, TBS: tbs, TIMESTAMP: str(int(time.time()))})
     data = encodeData(data)
-    res = s.post(url=SIGN_URL, data=data, timeout=5).json()
+    try:
+        res = s.post(url=SIGN_URL, data=data, timeout=5).json()
+    except Exception as e:
+        logger.error(f"签到贴吧：{kw} 请求异常：{e}")
+        return {'error_code': 'request_failed', 'error_msg': str(e)}
+    if sign_ok(res):
+        gain = res.get('gain_score') or res.get('sign_num') or ''
+        logger.info(f"签到成功：{kw}" + (f"，本次获得 {gain}" if gain else ''))
+    else:
+        logger.warning(f"签到失败：{kw} error_code={res.get('error_code')} error_msg={res.get('error_msg')}")
     return res
 
 def send_email(sign_list):
@@ -216,15 +230,26 @@ def main():
         logger.error("未配置BDUSS")
         return
     b = ENV['BDUSS'].split('#')
+    total = succeeded = 0
+    failed = []
     for n, i in enumerate(b):
         logger.info("开始签到第" + str(n) + "个用户" + i)
         tbs = get_tbs(i)
         favorites = get_favorite(i)
         for j in favorites:
             time.sleep(random.randint(1,5))
-            client_sign(i, tbs, j["id"], j["name"])
+            res = client_sign(i, tbs, j["id"], j["name"])
+            total += 1
+            if sign_ok(res):
+                succeeded += 1
+            else:
+                failed.append(j["name"])
+        logger.info(f"第{n}个用户签到汇总：共{len(favorites)}个，成功{succeeded}个，失败{len(failed)}个")
         logger.info("完成第" + str(n) + "个用户签到")
     # send_email(favorites)
+    logger.info(f"总计签到{total}个贴吧，成功{succeeded}个，失败{len(failed)}个")
+    if failed:
+        logger.warning("失败的贴吧：" + "、".join(failed))
     logger.info("所有用户签到结束")
 
 
